@@ -362,7 +362,6 @@ sub downloadCodeplug {
 
 
     my $i;
-    my $j;
     my $pkt;
     my $recvbuf;
     my @packetarray;
@@ -388,8 +387,6 @@ sub downloadCodeplug {
     }
     
 
-    $progress = 0;
-
     if ($MODE_COUNT > 16) {
 	for ($i = 0; $i < 256; $i++) {
 	    $pkt = genPacket('request_data', 8, $CODEPLUG_EXTENDED_ADDRESS + ($i * 8), ());
@@ -397,9 +394,7 @@ sub downloadCodeplug {
 	    $recvbuf = &receive;
 	    @packetarray = &parsePacketStream($recvbuf);
 	    if ($packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x38) {
-		for ($j = 1; $j <= 8; $j++) {
-		    print TFH $packetarray[1]{bytes}[$j];
-		}
+		print TFH $packetarray[1]{chars};
 	    }
 
 	    $progress++;
