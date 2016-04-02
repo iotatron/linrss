@@ -14,25 +14,22 @@ use Switch;
 # and --target to specify the thing you're writing to or modifying.
 #
 # --- Query either the radio or a stored codeplug...
-# linrss --source radio=/dev/ttyUSB0 --command query --options { serialnum | mode={1..32} | other globals| .... }
-# linrss --source radio=/dev/ttyUSB0 --command query --options address=0xB28B,bytes=3
-# linrss --source codeplug=/home/myers/radio/428ASY1234.codeplug --query { serialnum | mode={1..32} | ... }
+# linrss --source radio=/dev/ttyS0 --command query  { serialnum | mode={1..32} | other globals| .... }
+# linrss --source radio=/dev/ttyS0 --command query  address=0xB28B bytes=3
+# linrss --source codeplug=/home/myers/radio/428ASY1234.codeplug --command query { serialnum | mode={1..32} | ... }
 #
 # --- Set mode 12 tuning...
-# linrss --target radio=/dev/ttyUSB0 --command set --options mode=12,name=12,rx=144.235,tx=144.235,rx_tpl=100,tx_tpl=100
-#                                                            -----------------------------------------------------------
-#                                                                  |
-#                                                                  |--- this stuff is a "mode string"
+# linrss --target radio=/dev/ttyS0 --command set mode=12 name=12 rx=144.235 tx=144.235 rx_tpl=100 tx_tpl=100
 #
 # You can use linrss to alter the a codeplug file on disk, which it will do without asking for
 # confirmation or providing an undo operation:
-# linrss --target codeplug=/home/myers/radio/428ASY1234.codeplug --command set --options mode=12,name=12,rx=144.235,tx=144.235,rx_tpl=100,tx_tpl=100
+# linrss --target codeplug=/home/myers/radio/428ASY1234.codeplug --command set mode=12 name=12 rx=144.235 tx=144.235 rx_tpl=100 tx_tpl=100
 # The codeplug file will be permanently altered by the above command.  (I.e., linrss will read it, change it, and
 # write it back out, then exit.  Keep your own damn backups!)
 # Good question: what if the mode string specifies a mode that doesn't exist in the codeplug?
 #
 # --- Blank 
-# linrss --target radio=/dev/ttyUSB0 --command blank
+# linrss --target radio=/dev/ttyS0 --command blank
 # Does it make sense to "blank" a codeplug file?  Actually, yes, it probably does.  Linrss should be able
 # to create blanked codeplug templates with a specified number of modes, so that someone could bootstrap a
 # radio that has a corrupted codeplug.  But perhaps this should be done in an --initialize mode?  Ugh, 
@@ -40,23 +37,11 @@ use Switch;
 # respect to modes, signaling, etc.
 #
 # --- Download the radio's codeplug to a file
-# linrss --source= radio=/dev/ttyUSB0 --target codeplug=/home/myers/radio/333AUQ3431.codeplug --command download
+# linrss --source radio=/dev/ttyS0 --target codeplug=/home/myers/radio/333AUQ3431.codeplug --command download
 #
 # --- Upload a codeplug file to the radio
-# linrss --target radio=/dev/ttyUSB0 --source= codeplug=/home/myers/radio/333AUQ3431.codeplug --command upload
-# The use of --upload and --download is redundant here, since you can deduce from the usage
-# of both --source= and --target options that some sort of copying must be going on.  But I think
-# I'll leave it explicit for now as a sanity check on the user's intentions.
+# linrss --target radio=/dev/ttyS0 --source codeplug=/home/myers/radio/333AUQ3431.codeplug --command upload
 # 
-# linrss should respect environment variables for target and codeplug.
-# linrss should also read a ~/.linrss file for defaults (probably including target and codeplug).
-# /dev/ttyUSB0 will be a system default for radio= if nothing is specified in command line, env vars, or .linrss.
-# The serial number read from the radio should be a system default for the codeplug file name, appended with .codeplug.
-# (But not all use cases will have the software read the serial number from the radio, so this won't always work.)
-#
-# The in-memory codeplug (whether read from the radio or from disk) will always be in the native radio
-# format.  Routines that read or write to the codeplug image must convert to the native format (if taking human input) 
-# or from the native format (if generating human-readable output).
 
 
 
@@ -74,7 +59,7 @@ my $sourcedevice = "";
 my $targetstr = "";
 my $target = "";
 my $targetdevice = "";
-my $cmdstr = "";
+my @cmdarray;
 my $optionsstr = "";
 my $PORT = "/dev/ttyS0";
 my $CODEPLUG;
@@ -93,8 +78,7 @@ my $PL_CONSTANT = 4861000;
 
 GetOptions('source=s' => \$sourcestr,
 	   'target=s' => \$targetstr,
-	   'command=s' => \$cmdstr,
-	   'options=s' => \$optionsstr);
+	   'command=s@{1,}' => \@cmdarray);
 
 if ($sourcestr) {
     ($source, $sourcedevice) = split(/=/, $sourcestr);
@@ -167,22 +151,25 @@ if ($target eq 'codeplug') {
     $codeplugTargetFH = open(TFH, ">$targetdevice") || die "Error: couldn't open " . $targetdevice . "\n";
 }
 
-&parseCommand($cmdstr, $optionsstr);
+&parseCommand(\@cmdarray);
 
 &closeAndExit;
 
 
 sub parseCommand {
-    my $cmd = shift;
-    my $options = shift;
+    my @cmd = @{ shift @_ };
 
-    switch ($cmd) {
+    # The 0th element must be the command directive.
+    # Any subsequent elements are parameters to the command.
+
+    my $c = shift(@cmd);
+    switch ($c) {
 	case 'query' {
-	    &parseQueryCommand($options);
+	    &parseQueryCommand(\@cmd);
 	}
 
 	case 'set' {
-	    my $resultcode = &parseSetCommand($options);
+	    my $resultcode = &parseSetCommand(\@cmd);
 	    if ($resultcode) {
 		die "Error during set operation.\n";
 	    }
@@ -205,10 +192,10 @@ sub parseCommand {
 
 
 sub parseQueryCommand {
-    my $options = shift;
+    my @options = @{ shift @_ };
 
-    if ($options =~ /mode=/) {
-	(my $junk, my $mode) = split(/=/, $options);
+    if ($options[0] =~ /mode=/) {
+	(my $junk, my $mode) = split(/=/, $options[0]);
 	my %mode = getMode($mode);
 	print "Mode " . $mode{mode_num} . ": ";
 	print "Displays as \"" . $mode{mode_name} . "\"";
@@ -224,41 +211,44 @@ sub parseQueryCommand {
 	print "\n";
     }
 
-    if ($options =~ /modes/) {
+    if ($options[0] =~ /modes/) {
 	my $mode_count = &getModeCount();
 	print "Radio has " . $mode_count . " modes.\n";
     }
 
-    if ($options =~ /address=(\w+),bytes=(\d+)/) {
-	my $address = $1; my $hexaddress = hex($address); my $bytes = $2;
-	if ($bytes > 27) { $bytes = 27; }
-	my $packet = genPacket('request_data', $bytes, $hexaddress, ());
-	&transmit($packet);
-	my $recvbuf = &receive();
-	my @packetarray = &parsePacketStream($recvbuf);
-	if ($packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x38) {
-	    print $address . ": ";
-	    for (my $i = 0; $i < $bytes; $i++) {
-		printf("%02X ", $packetarray[1]{bytes}[$i+1]);
-	    }
-	    print "\n";
-	    print "        ";
-	    for ($i = 0; $i < $bytes; $i++) {
-		if ($packetarray[1]{bytes}[$i+1] >= 32 && $packetarray[1]{bytes}[$i+1] < 127) {
-		    print " " . chr($packetarray[1]{bytes}[$i+1]) . " ";
-		} else {
+    if ($options[0] =~ /address=(\w+)/) {
+	my $address = $1; my $hexaddress = hex($address); 
+	if ($options[1] =~ /bytes=(\d+)/) {
+	    my $bytes = $1;
+	    if ($bytes > 27) { $bytes = 27; }
+	    my $packet = genPacket('request_data', $bytes, $hexaddress, ());
+	    &transmit($packet);
+	    my $recvbuf = &receive();
+	    my @packetarray = &parsePacketStream($recvbuf);
+	    if ($packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x38) {
+		print $address . ": ";
+		for (my $i = 0; $i < $bytes; $i++) {
 		    printf("%02X ", $packetarray[1]{bytes}[$i+1]);
 		}
+		print "\n";
+		print "        ";
+		for ($i = 0; $i < $bytes; $i++) {
+		    if ($packetarray[1]{bytes}[$i+1] >= 32 && $packetarray[1]{bytes}[$i+1] < 127) {
+			print " " . chr($packetarray[1]{bytes}[$i+1]) . " ";
+		    } else {
+			printf("%02X ", $packetarray[1]{bytes}[$i+1]);
+		    }
 		    
+		}
+		print "\n";
 	    }
-	    print "\n";
 	}
     }
 }
 
 
 sub parseSetCommand {
-    my $options = shift;
+    my @params  = @{ shift @_ };
     my $mode;
     my $name;
     my $rxfreq;
@@ -268,9 +258,9 @@ sub parseSetCommand {
     my %oldpacket;
 
     # For example, 
-    # --command set -options mode=12,name=12,rx=144.235,tx=144.235,rx_tpl=100,tx_tpl=100
+    # --command set mode=12 name=12 rx=144.235 tx=144.235 rx_tpl=100 tx_tpl=100
 
-    my @params = split(/,/, $options);
+
     foreach $param (@params) {
 	if ($param =~ /mode=(\d+)/) {
 	    $mode = $1;
@@ -279,12 +269,22 @@ sub parseSetCommand {
 	if ($param =~ /name=(\d+)/) {
 	    $name = $1;
 	}
-
+	
+	# Check for Rx frequencies of the forms
+        # XYZ or XYZ.abc 
 	if ($param =~ /rx=(\d+)/) {
 	    $rxfreq = $1;
 	}
 
+	if ($param =~ /rx=(\d+\.\d*)/) {
+	    $rxfreq = $1;
+	}
+
 	if ($param =~ /tx=(\d+)/) {
+	    $txfreq = $1;
+	}
+	
+	if ($param =~ /tx=(\d+\.\d+)/) {
 	    $txfreq = $1;
 	}
 	
@@ -294,6 +294,14 @@ sub parseSetCommand {
 
 	if ($param =~ /tx_tpl=(\d+)/) {
 	    $txtpl = $1;
+	}
+
+	if ($param =~ /rx_dpl=(\d+)/) {
+	    $rxdpl = $1;
+	}
+
+	if ($param =~ /tx_dpl=(\d+)/) {
+	    $txdpl = $1;
 	}
     }
 
@@ -323,6 +331,16 @@ sub parseSetCommand {
     if ($txtpl) {
 	$oldpacket{tx_squelch_val} = $txtpl;
 	$oldpacket{tx_squelch_type} = 'TPL';
+    }
+
+    if ($rxdpl) {
+	$oldpacket{rx_squelch_val} = $rxdpl;
+	$oldpacket{rx_squelch_type} = 'DPL';
+    }
+
+    if ($txdpl) {
+	$oldpacket{tx_squelch_val} = $txdpl;
+	$oldpacket{tx_squelch_type} = 'DPL';
     }
 
 
