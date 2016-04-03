@@ -103,13 +103,15 @@ sub parseCommand {
     my $c = shift(@cmd);
     switch ($c) {
 	case 'query' {
-	    &parseQueryCommand(\@cmd);
+	    if (&parseQueryCommand(\@cmd)) {
+		&consoleLog("---> Query failed.\n");
+	    }
 	}
 
 	case 'set' {
 	    my $resultcode = &parseSetCommand(\@cmd);
 	    if ($resultcode) {
-		die "Error during set operation.\n";
+		&consoleLog("---> Error: set operation failed.\n");
 	    }
 	}	
 
@@ -152,9 +154,10 @@ sub parseQueryCommand {
 	    &consoleLog("---> Error: Radio only has " . $MODE_COUNT . " modes.\n");
 	    return -1;
 	}
-
-	my %mode = getMode($mode);
-	if (%mode) {
+	
+	my %mode = &getMode($mode);
+	
+    	if (%mode) {
 	    print "Mode " . $mode{mode_num} . ": ";
 	    print "Displays as \"" . $mode{mode_name} . "\"";
 	    print "; Rx " . $mode{rx_frequency} . " Mhz";
@@ -169,12 +172,16 @@ sub parseQueryCommand {
 	    print "\n";
 	} else {
 	    &consoleLog("---> Error: No mode data returned; unknown reason.\n");
+	    return -1;
 	}
+
+	return 0;
     }
 
     if ($options[0] =~ /modes/) {
 	my $mode_count = &getModeCount();
 	print "Radio has " . $mode_count . " modes.\n";
+	return 0;
     }
 
     if ($options[0] =~ /address=(\w+)/) {
@@ -205,7 +212,12 @@ sub parseQueryCommand {
 		print "\n";
 	    }
 	}
+
+	return 0;
     }
+
+    &consoleLog("---> Error: you didn't specify anything to query.  See help.\n");
+    return -1;
 }
 
 
