@@ -1,0 +1,228 @@
+LinRSS
+Copyright 2016 by David Myers, KI6GEQ
+Released under the terms of the GNU Public License (GPL).
+
+
+PURPOSE
+
+LinRSS allows querying and setting mode information from Motorola
+Maxtrac radios.  It may work on Motorola GM300 and Radius radios as
+well, but I have not tested it.  I make no guarantees -- and in fact,
+this program comes with no guarantees or warranties of any kind.  Use
+it at your own risk.  Be aware that misusing it can break your radio,
+perhaps permanently.  Have backups of your "codeplug", which is the
+name Motorola gives to the programmable data in the radio.  
+
+Sadly, LinRSS is not comprehensive enough to be a full replacement for
+Motorola's RSS, which is the ancient piece of software that Motorola
+originally sold to program these radios.  If you've found LinRSS
+because you searched online for a modern way to program these radios,
+then you probably know that the genuine Motorola RSS software has some
+crazy limitations: it's DOS-only, it requires a slow PC (like 16 MHz
+286 slow!), it cannot run under a DOS emulator on a modern operating
+system, it cannot work with USB-serial devices, and it requires odd
+serial speeds.  LinRSS is my answer to my frustration with all of the
+above.  I hope that it will work for you as well.  However, let me
+emphasize this: If you own one of these radios, it's in your best
+interest to purchase a copy of RSS, or befriend someone who owns it.
+This program cannot do many things that RSS can do, such as the
+initial setup of a "blanked" radio, nor can it set tuning and
+deviation parameters.
+
+Having said all that, if you have a working Maxtrac radio that you'd
+just like to program without having to boot into DOS, then LinRSS may
+well be for you.
+
+This program would not exist without the diligent and comprehensive
+work of Robert Meister, WA1MIK, who maintains the repeater-builder
+website.  He documented the layout of the codeplug and the nature of
+the serial protocol between RSS and the radio.  Kind of like an
+iceberg, Robert's work is the vast 90% underlaying my little 10%
+contribution on top.
+
+
+UPDATING
+
+The most up-to-date version of the software can always be found on
+GitHub.
+
+
+INSTALLING and RUNNING
+
+LinRSS comes as two programs.  The main one, called LinRSS (which I
+wrote), is a Perl program. I developed it under Perl 5.18 on a Linux
+Mint 17.1 system.  You must have Perl installed on your machine to run
+it.  The second, smaller program is called oddbaud, and it comes as C
+source code that you must compile.  I'll tell you how in a second, and
+it only takes a second.  But first, I must emphasize that oddbaud is
+not my work.  I found it online when I went searching for the best way
+to make the serial port on a Linux machine work at the odd baud rates
+needed by Maxtrac radios.  It was just an unattributed piece of source
+code that was on some programmer's forum.  A big thank you to whomever
+wrote it, because I have been unable to figure out how to make Perl do
+it.
+
+- Compiling oddbaud.c
+
+At a command prompt, type the following:
+
+> cc oddbaud.c
+
+This will create an executable file called 'a.out'.  Since that's not
+a memorable name, rename it to 'oddbaud'.  Put it in the same
+directory as LinRSS.
+
+- Installing LinRSS
+
+Besides the program itself, you'll need a few Perl modules to make
+LinRSS run.  They're actually listed at the top of the file in 'use'
+statements:
+
+use Getopt::Long qw( GetOptions );
+use IO::Termios;
+use Time::Out qw(timeout);
+use Time::HiRes qw( usleep );
+use Switch;
+
+Use Perl's CPAN facility to load all of these.  Using it would go
+something like the following.  (You should be root if you want to
+install these modules system-wide.)
+
+> cpan
+cpan shell -- CPAN exploration and modules installation (v2.00)
+Enter 'h' for help.
+
+cpan[1]> install Getopt::Long
+
+After typing that, CPAN will go through a long process of downloading
+and compiling the Getopt::Long module.  Assuming everything looks
+good, continue by installing the rest of the modules you see listed
+above.  It should go pretty quickly; they're all very standard
+modules.
+
+- Running LinRSS
+
+Now you should be ready to run LinRSS.
+
+> ./linrss
+LinRSS v0.2: Copyright 2016 by David Myers, KI6GEQ
+Released under the terms of the Gnu Public License (GPL).
+
+WARNING: This software has not been tested against all configurations
+         and models of Motorola Maxtrac radios.
+         USE AT YOUR OWN RISK.
+
+Bad command line options -- see help.
+>
+
+
+That's actually pretty good, since it means that you've installed all
+of the modules and there are no problems with your Perl runtime
+environment.
+
+Here's how you tell LinRSS to do something useful:
+
+> ./linrss --source radio=/dev/ttyS0 --command identify
+LinRSS v0.2: Copyright 2016 by David Myers, KI6GEQ
+Released under the terms of the Gnu Public License (GPL).
+
+WARNING: This software has not been tested against all configurations
+         and models of Motorola Maxtrac radios.
+         USE AT YOUR OWN RISK.
+
+oddbaud: actual baudrate is 115200 / 121 = 952.066101
+Radio parameters:
+   Serial Number: 428ASW1234
+   Band: VHF high band (150 MHz).
+   Frequency Step: 5 kHz
+   Modes: 32
+   Mode Base Address: 0x7810
+
+
+If you get something like the above, then you know everything is okay.
+LinRSS has contacted the radio through the serial port, successfully
+sent a handshaking packet, got a correct response, and then proceeded
+to interrogate the codeplug in the device.  It printed what it found.
+
+The command you entered told LinRSS to contact the radio on serial
+port /dev/ttyS0 as the 'source', and the given command was 'identify'.
+For all LinRSS commands, you'll need to specify either a source or a
+target (or both), and give a single command to perform.  Sources can
+either be the radio itself (through a serial port) or a codeplug file
+(on disk); same for targets.
+
+If you got the following message:
+
+---> Cannot open /dev/ttyS0: Permission denied
+
+then you'll need to become root and change the permissions of the
+/dev/ttyS0 serial device so that ordinary users can read and write to
+it.  For most Linux machines, this can be done with:
+
+> sudo chmod a+rw /dev/ttyS0
+
+It is also possible that your serial port is not on /dev/ttyS0.  Here,
+you are on your own.  Scroll through your boot messages to see what
+device the operating system assigned to your serial controller.  I
+suppose I should emphasize here that you must have a serial port, and
+it currently needs to be a real 16550 UART-based one.  USB-to-serial
+converters are currently not supported, because oddbaud cannot set
+them to the strange baud rate used by the radio.  It is important to
+me to fix this issue, because real UART serial ports are rare as hen's
+teeth on modern computers.  However, you can buy a PCI serial card for
+about 20 bucks, and these will work with LinRSS.  (That's what I use.)
+
+You are next going to want to query the mode information in the radio:
+
+> ./linrss --source radio=/dev/ttyS0 --command query mode=1
+
+Mode 1: Displays as "3"; Rx 155.16 Mhz; Tx 155.16 Mhz
+
+This command specifies the source of data as the radio on serial port
+/dev/ttyS0, and the command tells LinRSS to query the first programmed
+mode in the radio.  If you've used Maxtracs before, you know that the
+first mode can have any two-digit numeric "name", and on this radio
+mode 1 displays as "3".
+
+If your mode has TPL or DPL turned on, it will show up like this:
+
+Mode 6: Displays as "50"; Rx 145.23 Mhz; Tx 144.63 Mhz (100 TPL)
+
+Hopefully that makes sense.
+
+Now let's change that mode:
+
+> ./linrss --source radio=/dev/ttyS0 --command set mode=6 rx=146.35 tx=146.95 tx_tpl=100
+
+If all goes well, LinRSS will produce no output.  Nothing is good.  If
+something were bad, it would say so.  Run the query command again, and
+you'll see that the mode has changed.
+
+There are a few other things you can do.
+
+For one, you can download the entire codeplug image:
+
+> ./linrss --source radio=/dev/ttyS0 --target codeplug --command download
+
+Here you can see the use of both the source and the target directives.
+If we're going to download a codeplug, we need to tell LinRSS where
+the radio is (that's the source directive) and what file to download
+it to (that's the target).  If you merely specify '--target codeplug',
+as I've done above, then the program will automatically create a file
+called SERIALNUM.codeplug, where SERIALNUM is replaced by the actual
+serial number of your radio.  If you want a different name, use
+'--target codeplug=some_file_name'.
+
+Note that codeplug download takes a long time, because LinRSS does not
+yet kick the radio into its higher baud rate.  (The default is 952;
+the higher rate is about 7600.  That's what I mean about odd baud
+rates.)  So it's working at something like 20 characters per second
+transfer rate.
+
+I would document codeplug upload here, but it's not supported yet.
+
+-David
+myers@iotatron.com
+KI6GEQ
+
+
