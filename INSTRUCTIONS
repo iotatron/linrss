@@ -122,7 +122,7 @@ environment.
 
 Here's how you tell LinRSS to do something useful:
 
-> ./linrss --source radio=/dev/ttyS0 --command identify
+> ./linrss --radio /dev/ttyS0 identify
 LinRSS v0.2: Copyright 2016 by David Myers, KI6GEQ
 Released under the terms of the Gnu Public License (GPL).
 
@@ -143,13 +143,6 @@ If you get something like the above, then you know everything is okay.
 LinRSS has contacted the radio through the serial port, successfully
 sent a handshaking packet, got a correct response, and then proceeded
 to interrogate the codeplug in the device.  It printed what it found.
-
-The command you entered told LinRSS to contact the radio on serial
-port /dev/ttyS0 as the 'source', and the given command was 'identify'.
-For all LinRSS commands, you'll need to specify either a source or a
-target (or both), and give a single command to perform.  Sources can
-either be the radio itself (through a serial port) or a codeplug file
-(on disk); same for targets.
 
 If you got the following message:
 
@@ -174,7 +167,7 @@ about 20 bucks, and these will work with LinRSS.  (That's what I use.)
 
 You are next going to want to query the mode information in the radio:
 
-> ./linrss --source radio=/dev/ttyS0 --command query mode=1
+> ./linrss -- radio /dev/ttyS0 query mode=1
 
 Mode 1: Displays as "3"; Rx 155.16 Mhz; Tx 155.16 Mhz
 
@@ -192,7 +185,7 @@ Hopefully that makes sense.
 
 Now let's change that mode:
 
-> ./linrss --source radio=/dev/ttyS0 --command set mode=6 rx=146.35 tx=146.95 tx_tpl=100
+> ./linrss --radio /dev/ttyS0 set mode=6 rx=146.35 tx=146.95 tx_tpl=100
 
 If all goes well, LinRSS will produce no output.  Nothing is good.  If
 something were bad, it would say so.  Run the query command again, and
@@ -202,16 +195,23 @@ There are a few other things you can do.
 
 For one, you can download the entire codeplug image:
 
-> ./linrss --source radio=/dev/ttyS0 --target codeplug --command download
+> ./linrss --radio /dev/ttyS0 --codeplug my_radio.codeplug download
 
-Here you can see the use of both the source and the target directives.
 If we're going to download a codeplug, we need to tell LinRSS where
-the radio is (that's the source directive) and what file to download
-it to (that's the target).  If you merely specify '--target codeplug',
-as I've done above, then the program will automatically create a file
-called SERIALNUM.codeplug, where SERIALNUM is replaced by the actual
-serial number of your radio.  If you want a different name, use
-'--target codeplug=some_file_name'.
+the radio is (that's the radio directive, and it points to a serial
+port) and what file to download it to (that's the codeplug directive).
+
+Time-saving tip: If you're happy with the defaults, you can actually
+leave both --radio and --codeplug (and their arguments) out.  The
+software will default to using /dev/ttyS0 for the radio's serial port,
+and will use a default name of SERIALNUM.codeplug for the codeplug
+file, where SERIALNUM is replaced by the actual serial number of your
+radio.  You only need to specify --radio and --codeplug if you want to
+override these defaults.  This means you could just say:
+
+> ./linrss download
+
+to download a codeplug file.  
 
 Note that codeplug download takes a long time, because LinRSS does not
 yet kick the radio into its higher baud rate.  (The default is 952;
@@ -219,10 +219,28 @@ the higher rate is about 7600.  That's what I mean about odd baud
 rates.)  So it's working at something like 20 characters per second
 transfer rate.
 
-I would document codeplug upload here, but it's not supported yet.
+You can also upload a codeplug file.  Be very careful with this,
+because you will be blowing away every bit of EEPROM in the radio.  It
+works as you'd expect:
 
--David
-myers@iotatron.com
+> ./linrss [--radio <tty-port> --codeplug <codeplug-file-name>] upload
+
+Make sure LinRSS is working in every other way before you do this.  It
+will perform a quick sanity check to make sure that the serial number in
+the codeplug file matches the serial number of the radio (and this is
+not override-able; you will have to hex-edit the codeplug file to make
+the numbers match if you want to force a codeplug into the radio).
+
+There are lots of possible issues with this, so MAKE SURE YOU KNOW
+WHAT YOU ARE DOING.  All kinds of bad things can happen if you load up
+a codeplug that is too big for your radio, or has the wrong number of
+modes, or has incorrect tuning information.  Blanking your radio may
+be the only way to recover it, and maybe that even won't work.  I take
+no responsibility, and will simply repeat my earlier warning: Use this
+software at your own risk.
+
+-David 
+myers@iotatron.com 
 KI6GEQ
 
 
