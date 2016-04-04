@@ -3,6 +3,20 @@ Copyright 2016 by David Myers, KI6GEQ
 Released under the terms of the GNU Public License (GPL).
 
 
+4/4/2016 UPDATE
+
+I've added a stand-alone Perl executable to the GitHub repo.  It's
+called simply 'linrss', which better matches the documentation below
+anyway.  This is the file you want to download, if you just want to
+program radios.  No need to do all of the CPAN stuff mentioned below
+if you use this file.
+
+The original file 'linrss', which is the Perl source code, has been
+renamed to 'linrss.pl'.  
+
+You will still need to compile oddbaud.c, however.
+
+
 PURPOSE
 
 LinRSS allows querying and setting mode information from Motorola
