@@ -3,6 +3,16 @@ Copyright 2016 by David Myers, KI6GEQ
 Released under the terms of the GNU Public License (GPL).
 
 
+4/7/2016 UPDATE
+
+I ordered a USB->serial adapter based on the FTDI chipset online,
+based on some posts I read online that suggested it was more flexible
+on baud rates than the ubiquitous (and cheaper) PL2303 chipset.  And
+I can report that it works just fine with LinRSS.  
+
+You'll still need oddbaud to force it to the non-standard baud rates.
+
+
 4/4/2016 UPDATE
 
 I've added a stand-alone Perl executable to the GitHub repo.  It's
