@@ -72,13 +72,12 @@ if (&checkCommunications) {
     die "Error: Unable to establish communications with radio.  Exiting.\n"
 }
 
-    # my $pkt = &genHighSpeedPacket();
-    # &transmit($pkt);
-    # my $recvbuf = &receive();
-    # my @packetarray = &parsePacketStream($recvbuf);
-    # if ($packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x24) {
-    # 	system("./oddbaud $PORT 7600");
-    # }
+# my $pkt = &genHighSpeedPacket();
+# my @packetarray = &tx_and_rx($pkt);
+# if ($packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x24) {
+#     system("./oddbaud $PORT 7600");
+#     sleep(1);
+# }
 
 &interrogate;
 
@@ -101,6 +100,11 @@ sub parseCommand {
     # Any subsequent elements are parameters to the command.
 
     my $c = shift(@cmd);
+    if (! $c) {
+	die "---> No command (or incorrect command) given.\n";
+    }
+
+
     switch ($c) {
 	case 'query' {
 	    if (&parseQueryCommand(\@cmd)) {
@@ -139,6 +143,14 @@ sub parseCommand {
 	    }
 	    &downloadCodeplug;
 	}
+
+	case 'blank' {
+	    &blankRadio;
+	}
+
+	else {
+	    die "---> No command (or incorrect command) given.\n";
+	}
     }
 }
 
@@ -147,6 +159,31 @@ sub parseCommand {
 sub parseQueryCommand {
     my @options = @{ shift @_ };
 
+    if (! $options[0]) {
+	&consoleLog("---> Error: you must specify something to query.\n");
+	return -1;
+    }
+
+    if ($options[0] =~ /power/) {
+	my %power = &getPowerParameters();
+
+	if (%power) {
+
+	    print "Master Tx Power: " . $power{master_tx_power} . "\n";
+	    foreach $key (sort keys %power) {
+		if ($key =~ /point_(\d+)_power/) {
+		    $modeline = sprintf("point %02d: %d\n", $1, $power{$key});
+		    print $modeline;
+		}
+	    }
+	} else {
+	    &consoleLog("---> Error: no power information returned.\n");
+	    return -1;
+	}
+
+	
+    }
+	
     if ($options[0] =~ /mode=/) {
 	(my $junk, my $mode) = split(/=/, $options[0]);
 
@@ -161,12 +198,18 @@ sub parseQueryCommand {
 	    print "Mode " . $mode{mode_num} . ": ";
 	    print "Displays as \"" . $mode{mode_name} . "\"";
 	    print "; Rx " . $mode{rx_frequency} . " Mhz";
-	    if ($mode{rx_squelch_type}) {
+	    if ($mode{rx_squelch_type} eq 'TPL') {
 		print " (" . $mode{rx_squelch_val} . " " . $mode{rx_squelch_type} . ")";
 	    }
+	    if ($mode{rx_squelch_type} eq 'DPL' || $mode{rx_squelch_type} eq 'DPL_Inv') {
+		print " (" . sprintf("%03o", $mode{rx_squelch_val}) . " " . $mode{rx_squelch_type} . ")";
+	    }
 	    print "; Tx " . $mode{tx_frequency} . " Mhz";
-	    if ($mode{tx_squelch_type}) {
+	    if ($mode{tx_squelch_type} eq 'TPL') {
 		print " (" . $mode{tx_squelch_val} . " " . $mode{tx_squelch_type} . ")";
+	    }
+	    if ($mode{tx_squelch_type} eq 'DPL' || $mode{tx_squelch_type} eq 'DPL_Inv') {
+		print " (" . sprintf("%03o", $mode{tx_squelch_val}) . " " . $mode{tx_squelch_type} . ")";
 	    }
 	    
 	    print "\n";
@@ -228,7 +271,15 @@ sub parseSetCommand {
     my $rxfreq;
     my $txfreq;
     my $rxtpl;
+    my $rxtplflag = 0;
     my $txtpl;
+    my $txtplflag = 0;
+    my $rxdpl;
+    my $rxdplflag = 0;
+    my $rxdplinv = 0;
+    my $txdpl;
+    my $txdplflag = 0;
+    my $txdplinv = 0;
     my %oldpacket;
 
     # For example, 
@@ -263,19 +314,41 @@ sub parseSetCommand {
 	}
 	
 	if ($param =~ /rx_tpl=(\d+)/) {
+	    $rxtplflag = 1;
 	    $rxtpl = $1;
 	}
 
 	if ($param =~ /tx_tpl=(\d+)/) {
+	    $txtplflag = 1;
 	    $txtpl = $1;
 	}
 
-	if ($param =~ /rx_dpl=(\d+)/) {
+	# Note that DPL is traditionally expressed in octal!
+	if ($param =~ /rx_dpl=(\w+)/) {
+	    # The 'flag' variable marks that the user explicitly
+	    # set DPL.  We need this to recognize when the
+	    # user is zeroing out (i.e., turning off) DPL.
+	    # Also, inverted DPL will be signaled by
+	    # a trailing "I" on the number.
+	    $rxdplflag = 1;
 	    $rxdpl = $1;
+	    if ($rxdpl =~ /(\d+)I/) {
+		$rxdpl = $1;
+		$rxdplinv = 1;
+	    }
+
+	    $rxdpl = oct($rxdpl);
 	}
 
-	if ($param =~ /tx_dpl=(\d+)/) {
+	if ($param =~ /tx_dpl=(\w+)/) {
+	    $txdplflag = 1;
 	    $txdpl = $1;
+	    if ($txdpl =~ /(\d+)I/) {
+		$txdpl = $1;
+		$txdplinv = 1;
+	    }
+	    
+	    $txdpl = oct($txdpl);
 	}
     }
 
@@ -298,24 +371,50 @@ sub parseSetCommand {
 	$oldpacket{tx_frequency} = $txfreq;
     }
 
-    if ($rxtpl) {
+
+    # null these first
+    $oldpacket{rx_squelch_type} = '';
+    $oldpacket{rx_squelch_val} = 0;
+    $oldpacket{tx_squelch_type} = '';
+    $oldpacket{tx_squelch_val} = 0;
+
+    # then reset them based on the params we found
+    if ($rxtplflag) {
 	$oldpacket{rx_squelch_val} = $rxtpl;
-	$oldpacket{rx_squelch_type} = 'TPL';
+	if ($rxtpl) {
+	    $oldpacket{rx_squelch_type} = 'TPL';
+	} 
     }
 
-    if ($txtpl) {
+    if ($txtplflag) {
 	$oldpacket{tx_squelch_val} = $txtpl;
-	$oldpacket{tx_squelch_type} = 'TPL';
-    }
+	if ($txtpl) {
+	    $oldpacket{tx_squelch_type} = 'TPL';
+	}
+    } 
 
-    if ($rxdpl) {
+    if ($rxdplflag) {
 	$oldpacket{rx_squelch_val} = $rxdpl;
-	$oldpacket{rx_squelch_type} = 'DPL';
+	if ($rxdpl) {
+	    if ($rxdplinv) {
+		$oldpacket{rx_squelch_type} = 'DPL_Inv';
+	    } else {
+		$oldpacket{rx_squelch_type} = 'DPL';
+	    }		
+	    
+	}
     }
 
-    if ($txdpl) {
+    if ($txdplflag) {
 	$oldpacket{tx_squelch_val} = $txdpl;
-	$oldpacket{tx_squelch_type} = 'DPL';
+	if ($txdpl) {
+	    if ($txdplinv) {
+		$oldpacket{tx_squelch_type} = 'DPL_Inv';
+	    } else {
+		$oldpacket{tx_squelch_type} = 'DPL';
+	    }
+
+	}
     }
 
 
@@ -325,9 +424,7 @@ sub parseSetCommand {
     my $error = 0;
 
     foreach $pkt (@newpacketarray) {
-    	&transmit($pkt);
-    	$recvbuf = &receive();
-    	@thispacket = parsePacketStream($recvbuf);
+	@thispacket = tx_and_rx($pkt);
     	if ($thispacket[1]{lead_in} eq 'radio' && $thispacket[1]{function_code} == 0x24) {
     	    # Lookin' good so far.  Spec says to sleep for 10ms per byte written.
 	    # Since we generally write 8-byte blocks, we'll just sleep for
@@ -367,9 +464,7 @@ sub downloadCodeplug {
     
     for ($i = 0; $i < 64; $i++) {
 	$pkt = genPacket('request_data', 8, $CODEPLUG_BASE_ADDRESS + ($i * 8), ());
-	&transmit($pkt);
-	$recvbuf = &receive;
-	@packetarray = &parsePacketStream($recvbuf);
+	@packetarray = tx_and_rx($pkt);
 	if ($packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x38) {
 	    print TFH $packetarray[1]{chars};
 	}
@@ -381,9 +476,7 @@ sub downloadCodeplug {
     if ($MODE_COUNT > 16) {
 	for ($i = 0; $i < 256; $i++) {
 	    $pkt = genPacket('request_data', 8, $CODEPLUG_EXTENDED_ADDRESS + ($i * 8), ());
-	    &transmit($pkt);
-	    $recvbuf = &receive;
-	    @packetarray = &parsePacketStream($recvbuf);
+	    @packetarray = tx_and_rx($pkt);
 	    if ($packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x38) {
 		print TFH $packetarray[1]{chars};
 	    }
@@ -500,6 +593,91 @@ sub uploadCodeplugChunk {
 }
 
 
+
+sub bulkWrite {
+    my $address = shift;
+    my @bytearray = @{ shift @_ };
+    my $pkt;
+    my @packetarray;
+    my $retries = 3;
+    my $try = 1;
+
+    # We can only write 8-byte packets.
+    # Use $i and $j to walk through the
+    # bytearray, separating it into
+    # 8-byte chunks.
+    
+    my $i = 0; 
+    my $j;
+
+    while ($i < $#bytearray) {
+	$j = $i + 7;
+
+	if ($j > $#bytearray) {
+	    $j = $#bytearray;
+	}
+
+	$pkt = genPacket('write_data', $j - $i + 1, $address + $i, @bytearray[$i..$j]);
+	@packetarray = &tx_and_rx($pkt);
+	
+	# Spec says to delay 10 ms per byte written to EEPROM
+	usleep(80000);
+
+	if ($packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x24) {
+	    $i += 8;
+	    next;
+	} else {
+	    $try++;
+	}
+	
+	if ($try > $retries) { last; }
+    }
+    
+    return 0;
+}
+
+
+sub blankRadio {
+    # Radio is blanked when the serial number field is overwritten
+    # with spaces (ASCII 32 = 0x20) and the internal EEPROM is filled
+    # with 0xFF.  This internal EEPROM has room for 16 modes of 21
+    # bytes each.  (No need to fill the external EEPROM as well; it
+    # will be ignored if the internal EEPROM is 0xFF'd.)
+
+    my @serial = (0x20, 0x20, 0x20, 0x20,
+		  0x20, 0x20, 0x20, 0x20,
+		  0x20, 0x20);  # 10 digit serial number
+
+    my @mode = (0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF);   # 21 bytes in a mode
+    
+
+    # 0xB613 is the address of the serial number string in EEPROM
+    my $blankresult = &bulkWrite(0xB613, \@serial);
+
+    if ($blankresult) {
+    	return -1;
+    }
+	
+    for (my $i = 0; $i < 15; $i++) {
+    	$offset = $i * 21;
+    	$blankresult = &bulkWrite($MODE_BASE_ADDRESS + $offset, \@mode);
+	
+    	if ($blankresult) {
+    	    return -1;
+    	}
+    }
+    
+}
+
+
+sub expandRadio {
+    # 
+    # 
+}
+
+
 sub radioIdentificationScript {
     &consoleLog("Radio parameters:\n");
     &consoleLog("   Serial Number: " . $SERIAL_NUMBER . "\n");
@@ -534,7 +712,35 @@ sub radioIdentificationScript {
     &consoleLog("   Modes: " . $MODE_COUNT . "\n");
     my $str = sprintf("   Mode Base Address: 0x%04X\n", $MODE_BASE_ADDRESS);
     &consoleLog($str); 
-    
+
+    $pkt = genPacket('request_data', 1, 0xB65D, ());
+    @packetarray = tx_and_rx($pkt);
+    if ($packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x38) {
+	my $freqwarp = $packetarray[1]{bytes}[1];
+	&consoleLog("   Frequency Warp: " . $freqwarp . "\n");
+    }
+
+    $pkt = genPacket('request_data', 1, 0xB63E, ());
+    @packetarray = tx_and_rx($pkt);
+    if ($packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x38) {
+	my $txpower = $packetarray[1]{bytes}[1];
+	&consoleLog("   Tx Power: " . $txpower . "\n");
+    }
+
+    $pkt = genPacket('request_data', 1, 0xB65E, ());
+    @packetarray = tx_and_rx($pkt);
+    if ($packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x38) {
+	my $masterdev = $packetarray[1]{bytes}[1];
+	&consoleLog("   Master Deviation: " . $masterdev . "\n");
+    }
+
+    my $pkt = genPacket('request_data', 1, 0xB620, ());
+    my @packetarray = tx_and_rx($pkt);
+    if ($packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x38) {
+	my $panel = $packetarray[1]{bytes}[1];
+	&consoleLog("   Panel Type: " . $panel . "\n");
+    }
+
 }
 
 
@@ -661,11 +867,81 @@ sub checkCommunications {
 }
 
 
+
+sub tx_and_rx {
+    my $msg = shift;
+    my $recvbuf;
+    my @packetarray;
+
+    &transmit($msg);
+    $recvbuf = &receive();
+    @packetarray = &parsePacketStream($recvbuf);
+    return @packetarray;
+}
+
+
+sub getPowerParameters {
+    my %powertuning;
+
+    my $msg = &genPacket('request_data', 1, 0xB63E, ());
+    my @packetarray = tx_and_rx($msg);
+    if ($packetarray[1]{function_code} == 0x38) {
+	$powertuning{master_tx_power} = $packetarray[1]{bytes}[1];
+    }
+
+    # get the 32 power and dev parameters in two chunks...
+    $msg = &genPacket('request_data', 16, 0xB65F, ());
+    @packetarray = tx_and_rx($msg);
+    if ($packetarray[1]{function_code} == 0x38) {
+	$powertuning{point_1_power} = $packetarray[1]{bytes}[1];
+	$powertuning{point_2_power} = $packetarray[1]{bytes}[3];
+	$powertuning{point_3_power} = $packetarray[1]{bytes}[5];
+	$powertuning{point_4_power} = $packetarray[1]{bytes}[7];
+	$powertuning{point_5_power} = $packetarray[1]{bytes}[9];
+	$powertuning{point_6_power} = $packetarray[1]{bytes}[11];
+	$powertuning{point_7_power} = $packetarray[1]{bytes}[13];
+	$powertuning{point_8_power} = $packetarray[1]{bytes}[15];
+
+    }
+
+    $msg = &genPacket('request_data', 16, 0xB66F, ());
+    @packetarray = tx_and_rx($msg);
+    if ($packetarray[1]{function_code} == 0x38) {
+	$powertuning{point_9_power} = $packetarray[1]{bytes}[1];
+	$powertuning{point_10_power} = $packetarray[1]{bytes}[3];
+	$powertuning{point_11_power} = $packetarray[1]{bytes}[5];
+	$powertuning{point_12_power} = $packetarray[1]{bytes}[7];
+	$powertuning{point_13_power} = $packetarray[1]{bytes}[9];
+	$powertuning{point_14_power} = $packetarray[1]{bytes}[11];
+	$powertuning{point_15_power} = $packetarray[1]{bytes}[13];
+	$powertuning{point_16_power} = $packetarray[1]{bytes}[15];
+
+    }
+
+    return %powertuning;
+    
+}
+
+
+sub getDeviationParameters {
+    
+}
+
+
+sub getTuningParameters {
+    my $msg = &genPacket('request_data', 1, 0xB65D, ());
+    my @packetarray = tx_and_rx($msg);
+    if ($packetarray[1]{function_code} == 0x38) {
+	return $packetarray[1]{bytes}[1];
+    }
+
+}
+
+
+
 sub getSerialNumber {
     my $msg = &genQuerySerialNumberPacket();
-    &transmit($msg);
-    my $recvbuf = &receive();
-    my @packetarray = &parsePacketStream($recvbuf);
+    my @packetarray = tx_and_rx($msg);
     if ($packetarray[1]{function_code} == 0x38) {
 	return $packetarray[1]{chars};
     } else {    
@@ -677,9 +953,7 @@ sub getSerialNumber {
 
 sub getBand {
     my $packet = &genPacket('request_data', 1, 0xB63B, ());
-    &transmit($packet);
-    my $recvbuf = &receive();
-    my @packetarray = &parsePacketStream($recvbuf);
+    my @packetarray = tx_and_rx($packet);
     if ($packetarray[1]{function_code} == 0x38) {
 	my $split = $packetarray[1]{bytes}[1] & 0x12;
 	my $band = $packetarray[1]{bytes}[1] & 0x03;
@@ -712,9 +986,7 @@ sub getModeCount {
     my $mode_count;
 
     my $packet = genPacket('request_data', 2, $MODE_COUNT_ADDRESS, ());
-    &transmit($packet);
-    my $recvbuf = &receive();
-    my @packetarray = &parsePacketStream($recvbuf);
+    my @packetarray = tx_and_rx($packet);
     if ($packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x38) {
 	# if the first byte is zero, the second byte has the mode count
 	if ($packetarray[1]{bytes}[1] == 0x00) {
@@ -769,17 +1041,17 @@ sub genSetModePackets {
     $packetptr++;
 
 
-    # To-do: This code does not properly clear the squelch fields,
-    # if the user wants to get rid of them for a certain mode. 
-    # Investigate.
-
     my $rxsquelchval = 0;
     if ($mode{rx_squelch_type} && $mode{rx_squelch_type} eq 'TPL') {
 	# Encode Rx Squelch Value
-	$rxsquelchval = $PL_CONSTANT / (10 * $mode{rx_squelch_val});
+	if ($mode{rx_squelch_val}) {
+	    $rxsquelchval = $PL_CONSTANT / (10 * $mode{rx_squelch_val});
+	} else {
+	    $rxsquelchval = 0;
+	}
     }
 
-    if ($mode{rx_squelch_type} eq 'DPL') {
+    if ($mode{rx_squelch_type} eq 'DPL' || $mode{rx_squelch_type} eq 'DPL_Inv') {
 	$rxsquelchval = $mode{rx_squelch_val};
     }
 
@@ -791,13 +1063,17 @@ sub genSetModePackets {
     my $txsquelchtype = 0;
     if ($mode{tx_squelch_type} eq 'TPL') {
 	# Encode Tx Squelch Value
-	$txsquelchval = $PL_CONSTANT / (20 * $mode{tx_squelch_val});
+	if ($mode{tx_squelch_val}) {
+	    $txsquelchval = $PL_CONSTANT / (20 * $mode{tx_squelch_val});
+	} else {
+	    $txsquelchval = 0;
+	}
     }
 
-    if ($mode{tx_squelch_type} eq 'DPL') {
+    if ($mode{tx_squelch_type} eq 'DPL' || $mode{tx_squelch_type} eq 'DPL_Inv') {
 	$txsquelchval = $mode{tx_squelch_val};
     }
-
+    
     $packetbytes[$packetptr] = ($txsquelchval & 0xFF00) >> 8;
     $packetptr++;
     $packetbytes[$packetptr] = $txsquelchval & 0x00FF;
@@ -805,18 +1081,26 @@ sub genSetModePackets {
 
 
     # Squelch types
-    my $squelchbyte = 0;
+    my $squelchbyte = $mode{squelch_high_bits};
     if ($mode{rx_squelch_type} eq 'TPL') {
-	$squelchbyte |= 4;
+	$squelchbyte |= 0x04;
     }
     if ($mode{rx_squelch_type} eq 'DPL') {
-	$squelchbyte |= 8;
+	$squelchbyte |= 0x08;
+    }
+    if ($mode{rx_squelch_type} eq 'DPL_Inv') {
+	$squelchbyte |= 0x08;
+	$squelchbyte |= 0x20;
     }
     if ($mode{tx_squelch_type} eq 'TPL') {
-	$squelchbyte |= 1;
+	$squelchbyte |= 0x01;
     }
     if ($mode{tx_squelch_type} eq 'DPL') {
-	$squelchbyte |= 2;
+	$squelchbyte |= 0x02;
+    }
+    if ($mode{tx_squelch_type} eq 'DPL_Inv') {
+	$squelchbyte |= 0x02;
+	$squelchbyte |= 0x10;
     }
     $packetbytes[$packetptr] = $squelchbyte;
     $packetptr++;
@@ -917,29 +1201,59 @@ sub getMode {
 
 	$squelchtype = $packetarray[1]{bytes}[10];
 
+	$mode{squelch_high_bits} = 0;
+	if ($squelchtype & 0x80) {
+	    $mode{squelch_high_bits} |= 0x80;
+	}
+	
+	if ($squelchtype & 0x40) {
+	    $mode{squelch_high_bits} |= 0x40;
+	}
+
 	$mode{rx_squelch_type} = '';
 	$mode{rx_squelch_val} = 0;
 	$mode{tx_squelch_type} = '';
 	$mode{tx_squelch_val} = 0;
 
+	# Note that DPL is traditionally expressed in octal.
+	# Internally, however, we keep it as decimal.  Only
+	# on display or user input do we treat what is given
+	# as an octal quantity.
+
 	if ($squelchtype & 0x08) {
 	    $mode{rx_squelch_type} = 'DPL';
+	    
+	    # check for inverted DPL
+	    if ($squelchtype & 0x20) {
+		$mode{rx_squelch_type} = "DPL_Inv";
+	    }
+
 	    $mode{rx_squelch_val} = $rxsquelchval;
 	}
 
 	if ($squelchtype & 0x04) {
 	    $mode{rx_squelch_type} = 'TPL';
-	    $mode{rx_squelch_val} = int ($PL_CONSTANT / $rxsquelchval) / 10;
+	    if ($rxsquelchval) {
+		$mode{rx_squelch_val} = int ($PL_CONSTANT / $rxsquelchval) / 10;
+	    }
 	}
 
 	if ($squelchtype & 0x02) {
 	    $mode{tx_squelch_type} = 'DPL';
+
+	    # check for inverted DPL
+	    if ($squelchtype & 0x10) {
+		$mode{tx_squelch_type} = "DPL_Inv";
+	    }
+
 	    $mode{tx_squelch_val} = $txsquelchval;
 	}
 
 	if ($squelchtype & 0x01) {
 	    $mode{tx_squelch_type} = 'TPL';
-	    $mode{tx_squelch_val} = int ($PL_CONSTANT / (2 * $txsquelchval)) / 10;
+	    if ($txsquelchval) {
+		$mode{tx_squelch_val} = int ($PL_CONSTANT / (2 * $txsquelchval)) / 10;
+	    }
 	}
 
 	$mode{unknown_offset_10} = $packetarray[1]{bytes}[11];
