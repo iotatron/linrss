@@ -17,7 +17,7 @@ use Switch;
 # linrss --radio /dev/ttyS0 set mode=12 name=12 rx=144.235 tx=144.235 rx_tpl=100 tx_tpl=100
 #
 # --- Blank 
-# linrss --radio /dev/ttyS0 blank  (Not implemented yet!)
+# linrss --radio /dev/ttyS0 blank 
 #
 # --- Download the radio's codeplug to a file
 # linrss --radio /dev/ttyS0 --codeplug /home/myers/radio/333AUQ3431.codeplug download
@@ -106,6 +106,11 @@ sub parseCommand {
 
 
     switch ($c) {
+	case 'help' {
+	    &help;
+	    exit 0;
+	}
+
 	case 'query' {
 	    if (&parseQueryCommand(\@cmd)) {
 		&consoleLog("---> Query failed.\n");
@@ -158,6 +163,7 @@ sub parseCommand {
 
 sub parseQueryCommand {
     my @options = @{ shift @_ };
+    my $key;
 
     if (! $options[0]) {
 	&consoleLog("---> Error: you must specify something to query.\n");
@@ -170,14 +176,56 @@ sub parseQueryCommand {
 	if (%power) {
 
 	    print "Master Tx Power: " . $power{master_tx_power} . "\n";
-	    foreach $key (sort keys %power) {
-		if ($key =~ /point_(\d+)_power/) {
-		    $modeline = sprintf("point %02d: %d\n", $1, $power{$key});
+	    delete $power{master_tx_power};
+	    print "Radio Power Table:\n";
+	    foreach $key (sort { $a <=> $b } keys(%power)) {
+		if ($key =~ /(\d+)/) {
+		    if ($1 < 10) {
+			$modeline = sprintf("   point  %d: %d\n", $1, $power{$key});
+		    } else {
+			$modeline = sprintf("   point %d: %d\n", $1, $power{$key});
+		    }		    
 		    print $modeline;
 		}
 	    }
+	    
+	    return 0;
+	    
 	} else {
 	    &consoleLog("---> Error: no power information returned.\n");
+	    return -1;
+	}
+
+	
+    }
+	
+    if ($options[0] =~ /deviation/) {
+	my %deviation = &getDeviationParameters();
+
+	if (%deviation) {
+
+	    print "Master Deviation: " . $deviation{master_deviation} . "    ";
+	    print "TPL Deviation: " . $deviation{tpl_deviation} . "    ";
+	    print "DPL Deviation: " . $deviation{dpl_deviation} . "\n";
+	    print "Radio Deviation Table:\n";
+	    delete $deviation{master_deviation};
+	    delete $deviation{tpl_deviation};
+	    delete $deviation{dpl_deviation};
+	    foreach $key (sort { $a <=> $b } keys(%deviation)) {
+		if ($key =~ /(\d+)/) {
+		    if ($1 < 10) {
+			$modeline = sprintf("   point  %d: %d\n", $1, $deviation{$key});
+		    } else {
+			$modeline = sprintf("   point %d: %d\n", $1, $deviation{$key});
+		    }		    
+		    print $modeline;
+		}
+	    }
+	    
+	    return 0;
+	    
+	} else {
+	    &consoleLog("---> Error: no deviation information returned.\n");
 	    return -1;
 	}
 
@@ -644,9 +692,27 @@ sub blankRadio {
     # bytes each.  (No need to fill the external EEPROM as well; it
     # will be ignored if the internal EEPROM is 0xFF'd.)
 
+    my @header = (0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		  0xFF);  # 19 byte EEPROM header
+
     my @serial = (0x20, 0x20, 0x20, 0x20,
 		  0x20, 0x20, 0x20, 0x20,
 		  0x20, 0x20);  # 10 digit serial number
+
+    my @tuning = (0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		  0xFF, 0xFF);  # 112 bytes here
 
     my @mode = (0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
 		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
@@ -655,25 +721,40 @@ sub blankRadio {
 
     print "Blanking: ";
 
-    # 0xB613 is the address of the serial number string in EEPROM
-    my $blankresult = &bulkWrite(0xB613, \@serial);
-
-    print ".";
-
+    # 0xB600 is the base address of the EEPROM
+    my $blankresult = &bulkWrite(0xB600, \@header);
     if ($blankresult) {
-    	return -1;
+	print "!";
+    } else {
+	print "H";
     }
+
+    # 0xB613 is the address of the serial number string in EEPROM
+    $blankresult = &bulkWrite(0xB613, \@serial);
+    if ($blankresult) {
+	print "!";
+    } else {
+	print "S";
+    }
+
+    $blankresult = &bulkWrite(0xB61D, \@tuning);
+    if ($blankresult) {
+	print "!";
+    } else {
+	print "T";
+    }
+
 	
-    # for (my $i = 0; $i < 15; $i++) {
-    # 	$offset = $i * 21;
-    # 	$blankresult = &bulkWrite($MODE_BASE_ADDRESS + $offset, \@mode);
+    for (my $i = 0; $i < 16; $i++) {
+    	$offset = $i * 21;
+    	$blankresult = &bulkWrite($MODE_BASE_ADDRESS + $offset, \@mode);
 	
-    # 	if ($blankresult) {
-    # 	    print "!";
-    # 	} else {
-    # 	    print ".";
-    # 	}
-    # }
+    	if ($blankresult) {
+    	    print "!";
+    	} else {
+    	    print "m";
+    	}
+    }
 
     print " complete.\n";
     
@@ -806,7 +887,6 @@ sub receive {
 
 
 sub initializeSerialPort {
-    # We use an external Linux program to set the baud rate: 115200 (base rate) / 121 (divisor) = 952
     system("./oddbaud $PORT 952");
     if ($? == -1) {
     	return -1;
@@ -892,37 +972,47 @@ sub getPowerParameters {
     my %powertuning;
 
     my $msg = &genPacket('request_data', 1, 0xB63E, ());
-    my @packetarray = tx_and_rx($msg);
+    my @packetarray = &tx_and_rx($msg);
     if ($packetarray[1]{function_code} == 0x38) {
 	$powertuning{master_tx_power} = $packetarray[1]{bytes}[1];
     }
 
-    # get the 32 power and dev parameters in two chunks...
-    $msg = &genPacket('request_data', 16, 0xB65F, ());
-    @packetarray = tx_and_rx($msg);
+    # get the 32 power and dev parameters in 4 chunks...  
+    $msg = &genPacket('request_data', 8, 0xB65F, ()); 
+    @packetarray = &tx_and_rx($msg); 
     if ($packetarray[1]{function_code} == 0x38) {
-	$powertuning{point_1_power} = $packetarray[1]{bytes}[1];
-	$powertuning{point_2_power} = $packetarray[1]{bytes}[3];
-	$powertuning{point_3_power} = $packetarray[1]{bytes}[5];
-	$powertuning{point_4_power} = $packetarray[1]{bytes}[7];
-	$powertuning{point_5_power} = $packetarray[1]{bytes}[9];
-	$powertuning{point_6_power} = $packetarray[1]{bytes}[11];
-	$powertuning{point_7_power} = $packetarray[1]{bytes}[13];
-	$powertuning{point_8_power} = $packetarray[1]{bytes}[15];
+	$powertuning{1} = $packetarray[1]{bytes}[1];
+	$powertuning{2} = $packetarray[1]{bytes}[3];
+	$powertuning{3} = $packetarray[1]{bytes}[5];
+	$powertuning{4} = $packetarray[1]{bytes}[7]; 
+    }
+    
+    $msg = &genPacket('request_data', 8, 0xB667, ());
+    @packetarray = &tx_and_rx($msg);
+    if ($packetarray[1]{function_code} == 0x38) {
+	$powertuning{5} = $packetarray[1]{bytes}[1];
+	$powertuning{6} = $packetarray[1]{bytes}[3];
+	$powertuning{7} = $packetarray[1]{bytes}[5];
+	$powertuning{8} = $packetarray[1]{bytes}[7];
 
     }
 
-    $msg = &genPacket('request_data', 16, 0xB66F, ());
-    @packetarray = tx_and_rx($msg);
+    $msg = &genPacket('request_data', 8, 0xB66F, ());
+    @packetarray = &tx_and_rx($msg);
     if ($packetarray[1]{function_code} == 0x38) {
-	$powertuning{point_9_power} = $packetarray[1]{bytes}[1];
-	$powertuning{point_10_power} = $packetarray[1]{bytes}[3];
-	$powertuning{point_11_power} = $packetarray[1]{bytes}[5];
-	$powertuning{point_12_power} = $packetarray[1]{bytes}[7];
-	$powertuning{point_13_power} = $packetarray[1]{bytes}[9];
-	$powertuning{point_14_power} = $packetarray[1]{bytes}[11];
-	$powertuning{point_15_power} = $packetarray[1]{bytes}[13];
-	$powertuning{point_16_power} = $packetarray[1]{bytes}[15];
+	$powertuning{9} = $packetarray[1]{bytes}[1];
+	$powertuning{10} = $packetarray[1]{bytes}[3];
+	$powertuning{11} = $packetarray[1]{bytes}[5];
+	$powertuning{12} = $packetarray[1]{bytes}[7];
+    }
+
+    $msg = &genPacket('request_data', 8, 0xB677, ());
+    @packetarray = &tx_and_rx($msg);
+    if ($packetarray[1]{function_code} == 0x38) {
+	$powertuning{13} = $packetarray[1]{bytes}[1];
+	$powertuning{14} = $packetarray[1]{bytes}[3];
+	$powertuning{15} = $packetarray[1]{bytes}[5];
+	$powertuning{16} = $packetarray[1]{bytes}[7];
 
     }
 
@@ -932,6 +1022,64 @@ sub getPowerParameters {
 
 
 sub getDeviationParameters {
+    my %deviationtuning;
+
+    my $msg = &genPacket('request_data', 1, 0xB65E, ());
+    my @packetarray = tx_and_rx($msg);
+    if ($packetarray[1]{function_code} == 0x38) {
+	$deviationtuning{master_deviation} = $packetarray[1]{bytes}[1];
+    } 
+
+    my $msg = &genPacket('request_data', 1, 0xB63C, ());
+    my @packetarray = tx_and_rx($msg);
+    if ($packetarray[1]{function_code} == 0x38) {
+	$deviationtuning{tpl_deviation} = ($packetarray[1]{bytes}[1] & 0xF0) >> 4;
+	$deviationtuning{dpl_deviation} = $packetarray[1]{bytes}[1] & 0x0F;
+    } 
+
+
+    
+
+    # get the 32 deviation and dev parameters in four chunks...
+    $msg = &genPacket('request_data', 8, 0xB65F, ());
+    @packetarray = &tx_and_rx($msg);
+    if ($packetarray[1]{function_code} == 0x38) {
+	$deviationtuning{1} = $packetarray[1]{bytes}[2];
+	$deviationtuning{2} = $packetarray[1]{bytes}[4];
+	$deviationtuning{3} = $packetarray[1]{bytes}[6];
+	$deviationtuning{4} = $packetarray[1]{bytes}[8];
+    }
+
+    $msg = &genPacket('request_data', 8, 0xB667, ());
+    @packetarray = &tx_and_rx($msg);
+    if ($packetarray[1]{function_code} == 0x38) {
+	$deviationtuning{5} = $packetarray[1]{bytes}[2];
+	$deviationtuning{6} = $packetarray[1]{bytes}[4];
+	$deviationtuning{7} = $packetarray[1]{bytes}[6];
+	$deviationtuning{8} = $packetarray[1]{bytes}[8];
+
+    }
+
+    $msg = &genPacket('request_data', 8, 0xB66F, ());
+    @packetarray = &tx_and_rx($msg);
+    if ($packetarray[1]{function_code} == 0x38) {
+	$deviationtuning{9} = $packetarray[1]{bytes}[2];
+	$deviationtuning{10} = $packetarray[1]{bytes}[4];
+	$deviationtuning{11} = $packetarray[1]{bytes}[6];
+	$deviationtuning{12} = $packetarray[1]{bytes}[8];
+    }
+
+    $msg = &genPacket('request_data', 8, 0xB677, ());
+    @packetarray = &tx_and_rx($msg);
+    if ($packetarray[1]{function_code} == 0x38) {
+	$deviationtuning{13} = $packetarray[1]{bytes}[2];
+	$deviationtuning{14} = $packetarray[1]{bytes}[4];
+	$deviationtuning{15} = $packetarray[1]{bytes}[6];
+	$deviationtuning{16} = $packetarray[1]{bytes}[8];
+    }
+
+    return %deviationtuning;
+    
     
 }
 
@@ -1704,3 +1852,59 @@ sub consoleLog {
 
 }
 
+sub help {
+
+    die <<"EOF"
+
+Usage: 
+linrss [ --radio <serial-device> ] [ --codeplug <codeplug-file> ] command [ parameters...]
+
+   Commands are: help
+                  ---> Show this help message
+
+                 identify
+                  ---> List major radio parameters and operating modes.
+
+                 query
+                  ---> Give specific information about radio.
+                  ---> Parameters:
+                          modes -- gives number of modes (channels) in radio
+                          mode=<num> -- give all information about mode 
+                                        number <num>
+                          power -- show the power tuning levels
+                          deviation -- show the deviation table
+                          address=<hex-address> bytes=<num_bytes> -- list the 
+                                   <num_bytes> number of bytes starting at
+                                   memory address <hex-address>. (Some radios
+                                   may be limited to 8 bytes for
+                                   <num-bytes>. )
+ 
+
+                 set
+                  ---> Set mode information
+                  ---> Parameters
+		          mode=<mode-num> -- specify which mode to set
+                          name=<name> -- provide a numeric name for mode
+			  rx=<frequency> -- set the receive frequency
+			  tx=<frequency> -- set the transmit frequency
+			  rx_tpl=<TPL-tone> -- specify TPL for rx squelch
+			  tx_tpl=<TPL-tone> -- specify TPL for tx 
+			  rx_dpl=<DPL-code> -- specify DPL for rx squelch
+			  tx_dpl=<DPL-code> -- specify DPL for tx
+			  
+			  Append "I" to a DPL code to use inverted DPL.
+
+			  Maxtrac radios can only support either TPL or DPL,
+			  not both.  If you want to simply turn off either
+			  TPL or DPL, set the tone or code to zero.
+
+		 download
+		  ---> download a codeplug from <serial-device> to <codeplug-file>
+
+		 upload
+		  ---> upload codeplug from <codeplug-file> to <serial-device>
+
+		 blank
+		  ---> completely blank the codeplug
+EOF
+}
