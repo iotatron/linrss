@@ -630,7 +630,7 @@ sub bulkWrite {
 	    $try++;
 	}
 	
-	if ($try > $retries) { last; }
+	if ($try > $retries) { return -1; }
     }
     
     return 0;
@@ -653,21 +653,29 @@ sub blankRadio {
 		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF);   # 21 bytes in a mode
     
 
+    print "Blanking: ";
+
     # 0xB613 is the address of the serial number string in EEPROM
     my $blankresult = &bulkWrite(0xB613, \@serial);
+
+    print ".";
 
     if ($blankresult) {
     	return -1;
     }
 	
-    for (my $i = 0; $i < 15; $i++) {
-    	$offset = $i * 21;
-    	$blankresult = &bulkWrite($MODE_BASE_ADDRESS + $offset, \@mode);
+    # for (my $i = 0; $i < 15; $i++) {
+    # 	$offset = $i * 21;
+    # 	$blankresult = &bulkWrite($MODE_BASE_ADDRESS + $offset, \@mode);
 	
-    	if ($blankresult) {
-    	    return -1;
-    	}
-    }
+    # 	if ($blankresult) {
+    # 	    print "!";
+    # 	} else {
+    # 	    print ".";
+    # 	}
+    # }
+
+    print " complete.\n";
     
 }
 
@@ -680,7 +688,7 @@ sub expandRadio {
 
 sub radioIdentificationScript {
     &consoleLog("Radio parameters:\n");
-    &consoleLog("   Serial Number: " . $SERIAL_NUMBER . "\n");
+    &consoleLog("   Serial Number: \'" . $SERIAL_NUMBER . "\'\n");
     &consoleLog("   Band: ");
     switch ($BASE_FREQUENCY) {
 	case 0 {
@@ -846,7 +854,7 @@ sub resetRadio {
 	return -1;
     }
     my @packetarray = &parsePacketStream($recvbuf);
-    if (@packetarray && $packetarray[1]{function_code} != 0x24) {
+    if (@packetarray && $packetarray[1] && $packetarray[1]{function_code} != 0x24) {
 	return -1;
     }
     
@@ -940,14 +948,19 @@ sub getTuningParameters {
 
 
 sub getSerialNumber {
-    my $msg = &genQuerySerialNumberPacket();
-    my @packetarray = tx_and_rx($msg);
-    if ($packetarray[1]{function_code} == 0x38) {
-	return $packetarray[1]{chars};
-    } else {    
-	return 0;
+    my @packetarray;
+    my $serialnum;
+
+    my @msgs = &genQuerySerialNumberPackets();
+    
+    foreach $msg (@msgs) {
+	@packetarray = &tx_and_rx($msg);
+	if (@packetarray && $packetarray[1]{function_code} == 0x38) {
+	    $serialnum .= $packetarray[1]{chars};
+	} 
     }
 
+    return $serialnum;
 }
 
 
@@ -1152,6 +1165,13 @@ sub genSetModePackets {
 sub getMode {
     my $modenum = shift;
     my %mode; 
+    my @querypackets;
+    my $q;
+    my $recvbuf;
+    my @packetarray;
+    my @bytearray;
+    my $i;
+    
 
     if (($modenum - 1) < 0) {
 	return;
@@ -1161,124 +1181,130 @@ sub getMode {
 	return;
     }
 
-    my $querypacket = &genQueryModePacket($modenum - 1);
-    &transmit($querypacket);
-    my $recvbuf = &receive();
-    my @packetarray = &parsePacketStream($recvbuf);
-    if ($packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x38) {
-	# packet looks good; decode it
-	$mode{mode_num} = $modenum;
-	$mode{mode_name} = $packetarray[1]{bytes}[1];
-	
-	# If the mode name is 0x2F, then the mode name is the
-	# same as the mode_num.  Otherwise, subtract 0x80 
-	# from the mode_name to get the value to be displayed
-	# on the two-digit display
-
-	if ($mode{mode_name} == 0x2F) {
-	    $mode{mode_name} = $modenum;
+    @querypackets = &genQueryModePackets($modenum - 1);
+    foreach $q (@querypackets) {
+	&transmit($q);
+	$recvbuf = &receive();
+	@packetarray = &parsePacketStream($recvbuf);
+	if (@packetarray && $packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x38) {
+	    for ($i = 1; $i < $packetarray[1]{byte_count}; $i++) {
+		push @bytearray, $packetarray[1]{bytes}[$i];
+	    }
 	} else {
-	    $mode{mode_name} -= 0x80;
+	    $mode{error} = "BAD_RESPONSE";
+	    return %mode;
 	}
-
-	$mode{rx_frequency_offset} = $packetarray[1]{bytes}[2] << 8;
-	$mode{rx_frequency_offset} += $packetarray[1]{bytes}[3];
-	$mode{tx_frequency_offset} = $packetarray[1]{bytes}[4] << 8;
-	$mode{tx_frequency_offset} += $packetarray[1]{bytes}[5];
-
-	$mode{rx_frequency} = $BASE_FREQUENCY + ($mode{rx_frequency_offset} * 5) / 1000;
-	if ($mode{tx_frequency_offset} == 0xFFFF) {
-	    $mode{tx_frequency} = 0;
-	} else {
-	    $mode{tx_frequency} = $BASE_FREQUENCY + ($mode{tx_frequency_offset} * 5) / 1000;
-	}
-
-	$rxsquelchval = $packetarray[1]{bytes}[6] << 8;
-	$rxsquelchval += $packetarray[1]{bytes}[7];
-
-	$txsquelchval = $packetarray[1]{bytes}[8] << 8;
-	$txsquelchval += $packetarray[1]{bytes}[9];
-
-	$squelchtype = $packetarray[1]{bytes}[10];
-
-	$mode{squelch_high_bits} = 0;
-	if ($squelchtype & 0x80) {
-	    $mode{squelch_high_bits} |= 0x80;
-	}
-	
-	if ($squelchtype & 0x40) {
-	    $mode{squelch_high_bits} |= 0x40;
-	}
-
-	$mode{rx_squelch_type} = '';
-	$mode{rx_squelch_val} = 0;
-	$mode{tx_squelch_type} = '';
-	$mode{tx_squelch_val} = 0;
-
-	# Note that DPL is traditionally expressed in octal.
-	# Internally, however, we keep it as decimal.  Only
-	# on display or user input do we treat what is given
-	# as an octal quantity.
-
-	if ($squelchtype & 0x08) {
-	    $mode{rx_squelch_type} = 'DPL';
-	    
-	    # check for inverted DPL
-	    if ($squelchtype & 0x20) {
-		$mode{rx_squelch_type} = "DPL_Inv";
-	    }
-
-	    $mode{rx_squelch_val} = $rxsquelchval;
-	}
-
-	if ($squelchtype & 0x04) {
-	    $mode{rx_squelch_type} = 'TPL';
-	    if ($rxsquelchval) {
-		$mode{rx_squelch_val} = int ($PL_CONSTANT / $rxsquelchval) / 10;
-	    }
-	}
-
-	if ($squelchtype & 0x02) {
-	    $mode{tx_squelch_type} = 'DPL';
-
-	    # check for inverted DPL
-	    if ($squelchtype & 0x10) {
-		$mode{tx_squelch_type} = "DPL_Inv";
-	    }
-
-	    $mode{tx_squelch_val} = $txsquelchval;
-	}
-
-	if ($squelchtype & 0x01) {
-	    $mode{tx_squelch_type} = 'TPL';
-	    if ($txsquelchval) {
-		$mode{tx_squelch_val} = int ($PL_CONSTANT / (2 * $txsquelchval)) / 10;
-	    }
-	}
-
-	$mode{unknown_offset_10} = $packetarray[1]{bytes}[11];
-	$mode{unknown_offset_11} = $packetarray[1]{bytes}[12];
-	$mode{timeout} = $packetarray[1]{bytes}[13];
-	
-	$mode{signaling_address} = $packetarray[1]{bytes}[14] << 8;
-	$mode{signaling_address} += $packetarray[1]{bytes}[15];
-
-	$mode{unknown_offset_15} = $packetarray[1]{bytes}[16];
-	$mode{unknown_offset_16} = $packetarray[1]{bytes}[17];
-
-	$mode{unknown_offset_17} = $packetarray[1]{bytes}[18];  # supposed to always be 0xFF
-	
-	$mode{scan_list} = $packetarray[1]{bytes}[19] << 8;
-	$mode{scan_list} += $packetarray[1]{bytes}[20];
-
-	$mode{checksum} = $packetarray[1]{bytes}[21];
-
-    } else {
-	$mode{error} = "BAD_RESPONSE ";
     }
+    
+    $mode{mode_num} = $modenum;
+    $mode{mode_name} = $bytearray[0];
+    
+    # If the mode name is 0x2F, then the mode name is the
+    # same as the mode_num.  Otherwise, subtract 0x80 
+    # from the mode_name to get the value to be displayed
+    # on the two-digit display
+    
+    if ($mode{mode_name} == 0x2F) {
+	$mode{mode_name} = $modenum;
+    } else {
+	$mode{mode_name} -= 0x80;
+    }
+    
+    $mode{rx_frequency_offset} = $bytearray[1] << 8;
+    $mode{rx_frequency_offset} += $bytearray[2];
+    $mode{tx_frequency_offset} = $bytearray[3] << 8;
+    $mode{tx_frequency_offset} += $bytearray[4];
+    
+    $mode{rx_frequency} = $BASE_FREQUENCY + ($mode{rx_frequency_offset} * 5) / 1000;
+    if ($mode{tx_frequency_offset} == 0xFFFF) {
+	$mode{tx_frequency} = 0;
+    } else {
+	$mode{tx_frequency} = $BASE_FREQUENCY + ($mode{tx_frequency_offset} * 5) / 1000;
+    }
+    
+    $rxsquelchval = $bytearray[5] << 8;
+    $rxsquelchval += $bytearray[6];
+    
+    $txsquelchval = $bytearray[7] << 8;
+    $txsquelchval += $bytearray[8];
+    
+    $squelchtype = $bytearray[9];
+    
+    $mode{squelch_high_bits} = 0;
+    if ($squelchtype & 0x80) {
+	$mode{squelch_high_bits} |= 0x80;
+    }
+    
+    if ($squelchtype & 0x40) {
+	$mode{squelch_high_bits} |= 0x40;
+    }
+    
+    $mode{rx_squelch_type} = '';
+    $mode{rx_squelch_val} = 0;
+    $mode{tx_squelch_type} = '';
+    $mode{tx_squelch_val} = 0;
+    
+    # Note that DPL is traditionally expressed in octal.
+    # Internally, however, we keep it as decimal.  Only
+    # on display or user input do we treat what is given
+    # as an octal quantity.
+    
+    if ($squelchtype & 0x08) {
+	$mode{rx_squelch_type} = 'DPL';
+	
+	# check for inverted DPL
+	if ($squelchtype & 0x20) {
+	    $mode{rx_squelch_type} = "DPL_Inv";
+	}
+	
+	$mode{rx_squelch_val} = $rxsquelchval;
+    }
+    
+    if ($squelchtype & 0x04) {
+	$mode{rx_squelch_type} = 'TPL';
+	if ($rxsquelchval) {
+	    $mode{rx_squelch_val} = int ($PL_CONSTANT / $rxsquelchval) / 10;
+	}
+    }
+    
+    if ($squelchtype & 0x02) {
+	$mode{tx_squelch_type} = 'DPL';
+	
+	# check for inverted DPL
+	if ($squelchtype & 0x10) {
+	    $mode{tx_squelch_type} = "DPL_Inv";
+	}
+	
+	$mode{tx_squelch_val} = $txsquelchval;
+    }
+    
+    if ($squelchtype & 0x01) {
+	$mode{tx_squelch_type} = 'TPL';
+	if ($txsquelchval) {
+	    $mode{tx_squelch_val} = int ($PL_CONSTANT / (2 * $txsquelchval)) / 10;
+	}
+    }
+    
+    $mode{unknown_offset_10} = $bytearray[10];
+    $mode{unknown_offset_11} = $bytearray[11];
+    $mode{timeout} = $bytearray[12];
+    
+    $mode{signaling_address} = $bytearray[13] << 8;
+    $mode{signaling_address} += $bytearray[14];
+    
+    $mode{unknown_offset_15} = $bytearray[15];
+    $mode{unknown_offset_16} = $bytearray[16];
+    
+    $mode{unknown_offset_17} = $bytearray[17];  # supposed to always be 0xFF
+    
+    $mode{scan_list} = $bytearray[18] << 8;
+    $mode{scan_list} += $bytearray[19];
+    
+    $mode{checksum} = $bytearray[20];
 
     return %mode;
-}	
+} 
+
 
   
 
@@ -1312,25 +1338,32 @@ sub getModeBaseAddress {
 
 
 
-sub genQueryModePacket {
+sub genQueryModePackets {
     my $mode = shift;
     my $base_address = 0xB68D;
     my $mode_size = 21;
     my $offset;
-
-
+    my @pkts;
+    
     $offset = $MODE_BASE_ADDRESS + $mode_size * $mode;
 
-    return &genPacket("request_data", $mode_size, $offset, ());
+    push @pkts, &genPacket("request_data", 8, $offset, ());
+    push @pkts, &genPacket("request_data", 8, $offset + 8, ());
+    push @pkts, &genPacket("request_data", 5, $offset + 16, ());
+    return @pkts;
 }
 
 
 	
     
-sub genQuerySerialNumberPacket {
+sub genQuerySerialNumberPackets {
     my $base_address = 0xB613;
+    my @msgarray;
 
-    return &genPacket("request_data", 10, $base_address, ());
+    push @msgarray, &genPacket("request_data", 8, $base_address, ());
+    push @msgarray, &genPacket("request_data", 2, $base_address + 8, ());
+
+    return @msgarray;
 }
 
 
