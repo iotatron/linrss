@@ -9,7 +9,7 @@ use Switch;
 
 # Use cases...
 #
-# --- Query either the radio or a stored codeplug...
+# --- Query the radio
 # linrss --radio /dev/ttyS0 query  { serialnum | mode={1..32} | other globals| .... }
 # linrss --radio /dev/ttyS0 query  address=0xB28B bytes=3
 #
@@ -28,7 +28,7 @@ use Switch;
 
 
 
-&consoleLog("LinRSS v0.2: Copyright 2016 by David Myers, KI6GEQ\n");
+&consoleLog("LinRSS v0.3: Copyright 2016 by David Myers, KI6GEQ\n");
 &consoleLog("Linux-based programming software for Motorola Maxtrac radios.\n");
 &consoleLog("Released under the terms of the Gnu Public License (GPL).\n");
 &consoleLog("\nWARNING: This software has not been tested against all configurations\n");
@@ -58,18 +58,19 @@ my $CODEPLUG_EXTENDED_ADDRESS = 0x7800;
 
 
 GetOptions('radio=s' => \$PORT,
-	   'codeplug=s' => \$CODEPLUG);
+	   'codeplug=s' => \$CODEPLUG,
+	   'help' => sub { &help; } );
 
 
 
 &initializeSerialPort;
 
 if (&resetRadio) {
-    print "Error: Unable to reset radio.\n";
+    print "---> Error: Unable to reset radio.\n";
 }
 
 if (&checkCommunications) {
-    die "Error: Unable to establish communications with radio.  Exiting.\n"
+    die "---> Error: Unable to establish communications with radio.  Exiting.\n"
 }
 
 # my $pkt = &genHighSpeedPacket();
@@ -688,9 +689,10 @@ sub bulkWrite {
 sub blankRadio {
     # Radio is blanked when the serial number field is overwritten
     # with spaces (ASCII 32 = 0x20) and the internal EEPROM is filled
-    # with 0xFF.  This internal EEPROM has room for 16 modes of 21
-    # bytes each.  (No need to fill the external EEPROM as well; it
-    # will be ignored if the internal EEPROM is 0xFF'd.)
+    # with 0xFF.  This internal EEPROM has a tuning section of 112
+    # bytes followed by memory for 16 modes of 21 bytes each.  (No need
+    # to fill the external EEPROM as well; it will be ignored if the
+    # internal EEPROM is 0xFF'd.)
 
     my @header = (0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
 		  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
@@ -918,6 +920,10 @@ sub interrogate {
 
 
 sub closeAndExit {
+
+    # Here, reset radio to 952 baud...
+
+
     if ($TERM) {
 	$TERM->close();
     }
@@ -947,7 +953,7 @@ sub checkCommunications {
     &transmit($msg);
     my $recvbuf = &receive();
     my @packetarray = &parsePacketStream($recvbuf);
-    if ($packetarray[1]{function_code} != 0x24) {
+    if (@packetarray && $packetarray[1]{function_code} != 0x24) {
 	return -1;
     }
 
@@ -973,6 +979,7 @@ sub getPowerParameters {
 
     my $msg = &genPacket('request_data', 1, 0xB63E, ());
     my @packetarray = &tx_and_rx($msg);
+
     if ($packetarray[1]{function_code} == 0x38) {
 	$powertuning{master_tx_power} = $packetarray[1]{bytes}[1];
     }
@@ -1021,6 +1028,7 @@ sub getPowerParameters {
 }
 
 
+
 sub getDeviationParameters {
     my %deviationtuning;
 
@@ -1030,8 +1038,8 @@ sub getDeviationParameters {
 	$deviationtuning{master_deviation} = $packetarray[1]{bytes}[1];
     } 
 
-    my $msg = &genPacket('request_data', 1, 0xB63C, ());
-    my @packetarray = tx_and_rx($msg);
+    $msg = &genPacket('request_data', 1, 0xB63C, ());
+    @packetarray = tx_and_rx($msg);
     if ($packetarray[1]{function_code} == 0x38) {
 	$deviationtuning{tpl_deviation} = ($packetarray[1]{bytes}[1] & 0xF0) >> 4;
 	$deviationtuning{dpl_deviation} = $packetarray[1]{bytes}[1] & 0x0F;
@@ -1097,7 +1105,7 @@ sub getTuningParameters {
 
 sub getSerialNumber {
     my @packetarray;
-    my $serialnum;
+    my $serialnum = "0";
 
     my @msgs = &genQuerySerialNumberPackets();
     
@@ -1115,7 +1123,7 @@ sub getSerialNumber {
 sub getBand {
     my $packet = &genPacket('request_data', 1, 0xB63B, ());
     my @packetarray = tx_and_rx($packet);
-    if ($packetarray[1]{function_code} == 0x38) {
+    if (@packetarray && $packetarray[1]{function_code} == 0x38) {
 	my $split = $packetarray[1]{bytes}[1] & 0x12;
 	my $band = $packetarray[1]{bytes}[1] & 0x03;
 	switch ($band) {
@@ -1148,7 +1156,7 @@ sub getModeCount {
 
     my $packet = genPacket('request_data', 2, $MODE_COUNT_ADDRESS, ());
     my @packetarray = tx_and_rx($packet);
-    if ($packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x38) {
+    if (@packetarray && $packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x38) {
 	# if the first byte is zero, the second byte has the mode count
 	if ($packetarray[1]{bytes}[1] == 0x00) {
 	    return $packetarray[1]{bytes}[2];
@@ -1470,7 +1478,7 @@ sub getModeBaseAddress {
     &transmit($packet);
     my $recvbuf = &receive();
     my @packetarray = &parsePacketStream($recvbuf);
-    if ($packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x38) {
+    if (@packetarray && $packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x38) {
 	my $moved_address = $packetarray[1]{bytes}[1] << 8;
 	$moved_address += $packetarray[1]{bytes}[2];
 	if ($moved_address >= 0x6000 && $moved_address <= 0x7FFF) {
@@ -1852,9 +1860,10 @@ sub consoleLog {
 
 }
 
+
 sub help {
 
-    die <<"EOF"
+    print <<TEXT;
 
 Usage: 
 linrss [ --radio <serial-device> ] [ --codeplug <codeplug-file> ] command [ parameters...]
@@ -1891,8 +1900,9 @@ linrss [ --radio <serial-device> ] [ --codeplug <codeplug-file> ] command [ para
 			  tx_tpl=<TPL-tone> -- specify TPL for tx 
 			  rx_dpl=<DPL-code> -- specify DPL for rx squelch
 			  tx_dpl=<DPL-code> -- specify DPL for tx
-			  
-			  Append "I" to a DPL code to use inverted DPL.
+
+			  DPL codes are expressed in octal.
+			  Append "I" to a DPL code to make it inverted.
 
 			  Maxtrac radios can only support either TPL or DPL,
 			  not both.  If you want to simply turn off either
@@ -1905,6 +1915,9 @@ linrss [ --radio <serial-device> ] [ --codeplug <codeplug-file> ] command [ para
 		  ---> upload codeplug from <codeplug-file> to <serial-device>
 
 		 blank
-		  ---> completely blank the codeplug
-EOF
+		  ---> completely blank the codeplug.  Radio will be unusable
+		       until re-initialized by Motorola RSS.
+		       
+TEXT
+exit;
 }
