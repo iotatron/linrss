@@ -55,7 +55,7 @@ int serial_open(const char *device, int rate)
 		if (ioctl(fd, TIOCGSERIAL, &serinfo) < 0)
 			return -1;
 		if (serinfo.custom_divisor * rate != serinfo.baud_base) {
-			warnx("actual baudrate is %d / %d = %f",
+			printf("actual baudrate is %d / %d = %f",
 			      serinfo.baud_base, serinfo.custom_divisor,
 			      (float)serinfo.baud_base / serinfo.custom_divisor);
 		}
