@@ -3,6 +3,25 @@ Copyright 2016 by David Myers, KI6GEQ
 Released under the terms of the GNU Public License (GPL).
 
 
+
+5/3/2016 UPDATE
+
+LinRSS now uses the high-speed serial mode on the radio by default.
+(Use the --lowspeed switch if you need to force it to remain at the
+slower speed.)  
+
+An x86_64 compiled version of oddbaud is available in the releases
+section of the GitHub repository.  This will save almost everyone the
+trouble of having to compile it.  (Unless you want a 32-bit
+version...  See instructions below if you need to compile it.)
+
+The default serial port is now /dev/ttyUSB0.  I changed this because
+the FTDI USB device is much more flexible on speeds than the UART 
+serial device.
+
+Help is now fully implemented.  Use the switch --help.
+
+
 4/7/2016 UPDATE
 
 I ordered a USB->serial adapter based on the FTDI chipset online,
@@ -136,7 +155,7 @@ WARNING: This software has not been tested against all configurations
          and models of Motorola Maxtrac radios.
          USE AT YOUR OWN RISK.
 
-Bad command line options -- see help.
+---> No command (or incorrect command) given.
 >
 
 
