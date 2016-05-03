@@ -10,25 +10,25 @@ use Switch;
 # Use cases...
 #
 # --- Query the radio
-# linrss --radio /dev/ttyS0 query  { serialnum | mode={1..32} | other globals| .... }
-# linrss --radio /dev/ttyS0 query  address=0xB28B bytes=3
+# linrss --radio /dev/ttyUSB0 query  { serialnum | mode={1..32} | other globals| .... }
+# linrss --radio /dev/ttyUSB0 query  address=0xB28B bytes=3
 #
 # --- Set mode 12 tuning...
-# linrss --radio /dev/ttyS0 set mode=12 name=12 rx=144.235 tx=144.235 rx_tpl=100 tx_tpl=100
+# linrss --radio /dev/ttyUSB0 set mode=12 name=12 rx=144.235 tx=144.235 rx_tpl=100 tx_tpl=100
 #
 # --- Blank 
-# linrss --radio /dev/ttyS0 blank 
+# linrss --radio /dev/ttyUSB0 blank 
 #
 # --- Download the radio's codeplug to a file
-# linrss --radio /dev/ttyS0 --codeplug /home/myers/radio/333AUQ3431.codeplug download
+# linrss --radio /dev/ttyUSB0 --codeplug /home/myers/radio/333AUQ3431.codeplug download
 #
 # --- Upload a codeplug file to the radio
-# linrss --radio /dev/ttyS0 --codeplug /home/myers/radio/333AUQ3431.codeplug upload
+# linrss --radio /dev/ttyUSB0 --codeplug /home/myers/radio/333AUQ3431.codeplug upload
 # 
 
 
 
-&consoleLog("LinRSS v0.3: Copyright 2016 by David Myers, KI6GEQ\n");
+&consoleLog("LinRSS v0.5: Copyright 2016 by David Myers, KI6GEQ\n");
 &consoleLog("Linux-based programming software for Motorola Maxtrac radios.\n");
 &consoleLog("Released under the terms of the Gnu Public License (GPL).\n");
 &consoleLog("\nWARNING: This software has not been tested against all configurations\n");
@@ -41,7 +41,7 @@ my $radiodevice = "";
 my $codeplugfile = "";
 my @cmdarray;
 my $optionsstr = "";
-my $PORT = "/dev/ttyS0";
+my $PORT = "/dev/ttyUSB0";
 my $CODEPLUG;
 
 my $TERM; 
@@ -54,11 +54,12 @@ my $SERIAL_NUMBER;
 my $PL_CONSTANT = 4861000;
 my $CODEPLUG_BASE_ADDRESS = 0xB600;
 my $CODEPLUG_EXTENDED_ADDRESS = 0x7800;
-
-
+my $LOWSPEED = 0;
+my $i = 0;
 
 GetOptions('radio=s' => \$PORT,
 	   'codeplug=s' => \$CODEPLUG,
+	   'lowspeed|l' => \$LOWSPEED,
 	   'help' => sub { &help; } );
 
 
@@ -73,12 +74,29 @@ if (&checkCommunications) {
     die "---> Error: Unable to establish communications with radio.  Exiting.\n"
 }
 
-# my $pkt = &genHighSpeedPacket();
-# my @packetarray = &tx_and_rx($pkt);
-# if ($packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x24) {
-#     system("./oddbaud $PORT 7600");
-#     sleep(1);
-# }
+if (! $LOWSPEED) {
+    for ($i = 0; $i < 3; $i++) {
+	# &consoleLog("---> Attempting to establish high-speed communications...\n");
+	&setHighSpeedMode;
+	&closeSerialPort;
+	sleep(1);
+	system("./oddbaud $PORT 7594 > /dev/null");
+	&openSerialPort;
+	if (! &checkCommunications) {
+	    last;
+	}
+
+	&closeSerialPort;
+	&initializeSerialPort;
+    }
+    
+    if ($i >= 3) {
+	&consoleLog("---> Error: Unable to establish high-speed communications with radio.  Try --lowspeed.\n");
+	&closeAndExit;
+    }
+    
+}
+
 
 &interrogate;
 
@@ -92,6 +110,83 @@ if (!$CODEPLUG) {
 &parseCommand(\@ARGV);
 
 &closeAndExit;
+
+
+
+
+
+sub initializeSerialPort {
+    system("./oddbaud $PORT 949 > /dev/null");
+    if ($? == -1) {
+    	return -1;
+    }
+
+    &openSerialPort;
+}
+
+
+
+sub openSerialPort {
+    # $TERM and $ATTRS are global in scope
+    $TERM = IO::Termios->open($PORT) || die "---> Cannot open $PORT: $!\n";
+    $ATTRS = $TERM->getattr;
+    $ATTRS->setcsize( 7 );
+    $ATTRS->setparity( 'e' );
+    $ATTRS->setstop( 1 );
+    $TERM->setattr( $ATTRS );
+    return 0;
+}
+
+
+
+sub closeSerialPort { 
+    if ($TERM) {
+	$TERM->close();
+    }
+
+    return 0;
+}
+
+
+
+sub setHighSpeedMode {
+    my $pkt = &genHighSpeedPacket();
+    my @packetarray = &tx_and_rx($pkt);
+    if (@packetarray && $packetarray[1] && $packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x24) {    
+	return 0;
+    }
+
+    return -1;
+}
+
+
+sub closeAndExit {
+    # Here, reset radio to 949 baud...
+    if (! $LOWSPEED) {
+	if (&resetRadio) {
+	    &consoleLog("---> Error: resetting radio to lower speed failed; recommend power-cycling.\n");
+	} else {
+	    &closeSerialPort;
+	    sleep(1);
+	    &initializeSerialPort;
+	    if (&checkCommunications) {
+		&consoleLog("---> Error: failed to re-establish low-speed communications.\n");
+	    } else {
+		# &consoleLog("---> Radio reset to lower serial port speed.\n");
+	    }
+	}
+    }
+
+    if ($TERM) {
+	$TERM->close();
+    }
+    
+    exit 0;
+}
+
+
+
+
 
 
 sub parseCommand {
@@ -888,24 +983,6 @@ sub receive {
 
 
 
-sub initializeSerialPort {
-    system("./oddbaud $PORT 952");
-    if ($? == -1) {
-    	return -1;
-    }
-
-    # $TERM and $ATTRS are global in scope
-    $TERM = IO::Termios->open($PORT) || die "---> Cannot open $PORT: $!\n";
-    $ATTRS = $TERM->getattr;
-    $ATTRS->setcsize( 7 );
-    $ATTRS->setparity( 'e' );
-    $ATTRS->setstop( 1 );
-    $TERM->setattr( $ATTRS );
-    
-    return 0;
-}
-
-
 sub interrogate {
     $SERIAL_NUMBER = &getSerialNumber;
     $BASE_FREQUENCY = &getBand;
@@ -916,18 +993,6 @@ sub interrogate {
     }
     $MODE_COUNT = &getModeCount;
     $MODE_BASE_ADDRESS = &getModeBaseAddress;
-}
-
-
-sub closeAndExit {
-
-    # Here, reset radio to 952 baud...
-
-
-    if ($TERM) {
-	$TERM->close();
-    }
-    exit 0;
 }
 
 
@@ -953,7 +1018,16 @@ sub checkCommunications {
     &transmit($msg);
     my $recvbuf = &receive();
     my @packetarray = &parsePacketStream($recvbuf);
-    if (@packetarray && $packetarray[1]{function_code} != 0x24) {
+    
+    if (! @packetarray) {
+	return -1;
+    }
+
+    if (! $packetarray[1]) {
+	return -1;
+    }
+
+    if ($packetarray[1]{function_code} != 0x24) {
 	return -1;
     }
 
@@ -1105,13 +1179,13 @@ sub getTuningParameters {
 
 sub getSerialNumber {
     my @packetarray;
-    my $serialnum = "0";
+    my $serialnum = "";
 
     my @msgs = &genQuerySerialNumberPackets();
     
     foreach $msg (@msgs) {
 	@packetarray = &tx_and_rx($msg);
-	if (@packetarray && $packetarray[1]{function_code} == 0x38) {
+	if (@packetarray && $packetarray[1]{function_code} && $packetarray[1]{function_code} == 0x38) {
 	    $serialnum .= $packetarray[1]{chars};
 	} 
     }
@@ -1122,7 +1196,7 @@ sub getSerialNumber {
 
 sub getBand {
     my $packet = &genPacket('request_data', 1, 0xB63B, ());
-    my @packetarray = tx_and_rx($packet);
+    my @packetarray = &tx_and_rx($packet);
     if (@packetarray && $packetarray[1]{function_code} == 0x38) {
 	my $split = $packetarray[1]{bytes}[1] & 0x12;
 	my $band = $packetarray[1]{bytes}[1] & 0x03;
@@ -1155,7 +1229,7 @@ sub getModeCount {
     my $mode_count;
 
     my $packet = genPacket('request_data', 2, $MODE_COUNT_ADDRESS, ());
-    my @packetarray = tx_and_rx($packet);
+    my @packetarray = &tx_and_rx($packet);
     if (@packetarray && $packetarray[1]{lead_in} eq 'radio' && $packetarray[1]{function_code} == 0x38) {
 	# if the first byte is zero, the second byte has the mode count
 	if ($packetarray[1]{bytes}[1] == 0x00) {
@@ -1530,7 +1604,9 @@ sub genResetPacket {
 
 
 sub genHighSpeedPacket {
-    return &genPacket("high_speed", 1, 0x0000, 0x04);
+    my @data;
+    push @data, 0x04;
+    return &genPacket("high_speed", 1, 0x0000, @data);
 }
 
 sub genPacket {
@@ -1866,7 +1942,18 @@ sub help {
     print <<TEXT;
 
 Usage: 
-linrss [ --radio <serial-device> ] [ --codeplug <codeplug-file> ] command [ parameters...]
+linrss [ --lowspeed ] [ --radio <serial-device> ] [ --codeplug <codeplug-file> ] command [ parameters...]
+
+   --radio <serial-device>    specifies the serial port to use.  Defaults
+                              to /dev/ttyUSB0.
+
+   --codeplug <codeplug-file> specifies the filename of the codeplug file
+                              to upload/download.  Defaults to whatever
+                              is detected upon radio interrogation.
+
+   --lowspeed                 specifies that linrss should not try to
+                              negotiate with the radio at the higher
+                              serial port speed.
 
    Commands are: help
                   ---> Show this help message
